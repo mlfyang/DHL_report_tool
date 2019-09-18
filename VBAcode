@@ -1,0 +1,509 @@
+'
+'
+' This program automaticaly generates the backend data for a kronos report
+' IMPORTANT: Sometimes excel crashes and closes for unkown reasons, be sure to save any opened excel files before running
+'
+'
+' Public global variable that determines a row where the body of actual data is located
+' Sometimes the files contain a large list of missing data of certain persons
+' This program will not run if the row number of Contentrow is not within the main body of the desired data
+Public ContentRow As Integer
+Public file_path As Variant
+Public extra_path As Variant
+
+
+Function GetFolder() As String
+    Dim fldr As FileDialog
+    Dim sItem As String
+    Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
+    With fldr
+        .Title = "Select a Folder"
+        .AllowMultiSelect = False
+        .InitialFileName = Application.DefaultFilePath
+        If .Show <> -1 Then GoTo NextCode
+        sItem = .SelectedItems(1)
+    End With
+NextCode:
+    GetFolder = sItem
+    Set fldr = Nothing
+End Function
+
+Sub file_location()
+
+    file_path = GetFolder & "\"
+End Sub
+
+Sub extra_file()
+    
+    extra_path = GetFolder & "\"
+    
+End Sub
+
+Sub Begin()
+
+    Call Main(file_path, extra_path)
+
+End Sub
+
+Sub Main(file_path As Variant, extra_path As Variant)
+    'Change this number to be a row located in the main body of the data files, for all data files
+    
+    If file_path = "\" Then
+        MsgBox ("Enter file paths for the daily data folder")
+        End
+    End If
+    
+    If extra_path = "\" Then
+        MsgBox ("Enter file paths for the constants folder")
+        End
+    End If
+    
+    ContentRow = 89
+    
+    
+    ' This macro serves as the main program that runs all helper functions
+    ' cws saves the active worksheet where the data will be stored to a variable
+    Dim cws As Worksheet
+    Dim newWB As Workbook
+    
+    Set newWB = Workbooks.Add
+    Set newWB = ActiveWorkbook
+    
+    Set cws = ActiveSheet
+    
+    ' Folder pathing for the raw kronos data
+    ' The pathing must end with a "\" character
+    ' Ex: C:\Path\Path\Path\
+    
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''' Raw data (Change this) ''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    path = file_path
+    ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    Filename = Dir(path & "*.xls")
+
+    
+    ' Loop through each csv file in Path, and imports them all into the current csv file
+    Do While Filename <> ""
+        Workbooks.Open Filename:=path & Filename, ReadOnly:=True
+        For Each Sheet In ActiveWorkbook.Sheets
+            Sheet.copy After:=ThisWorkbook.Sheets(1)
+        Next Sheet
+        Workbooks(Filename).Close
+        Filename = Dir()
+    Loop
+    
+    ' Calls the "X" function to begin generating the report
+    Call X
+    
+End Sub
+Sub Import_constants()
+' Imports all the reference files for the kronos report
+'
+' The pathing must end with a "\" character
+' Ex: C:\Path\Path\Path\
+    '''''''''''''''''''''''''''''''''''''''''''''''' HR list and Holidays (Change This) ''''''''''''''''''''''''''''''''''''''''''''''''
+    Constant = extra_path
+    ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    Filename2 = Dir(Constant & "*.xls")
+    
+    Do While Filename2 <> ""
+        Workbooks.Open Filename:=Constant & Filename2, ReadOnly:=True
+        For Each Sheet In ActiveWorkbook.Sheets
+            Sheet.copy After:=ThisWorkbook.Sheets(1)
+        Next Sheet
+        Workbooks(Filename2).Close
+        Filename2 = Dir()
+    Loop
+    
+End Sub
+Sub X()
+' Loops through the importing and formatting raw data to be ready for manipulation
+' Copies the raw data from all sheets into one
+' "pre" contains the data for one day only
+' "data" contains the data for the week
+    Dim ws As Worksheet
+    Dim pre As Worksheet
+    Dim data As Worksheet
+    Dim ArrCount As Long
+    Dim HeadcountArr(14) As Long
+    
+    ' Variables required for calculating the headcount in the "database" macro
+    ' HeadcountArr is an array that keeps track of what row the date changes in the weekly data
+    ArrCount = 1
+    HeadcountArr(0) = 2
+    
+    ' Create and set variables for two new tempporary sheets
+    Sheets.Add After:=ActiveSheet
+    Set pre = ActiveSheet
+    Sheets.Add After:=ActiveSheet
+    Set data = ActiveSheet
+    
+    ' Move the data and pre sheets to the front of the workbook
+    pre.Select
+    pre.Move Before:=Sheets(2)
+    data.Select
+    data.Move Before:=Sheets(3)
+    
+    Application.DisplayAlerts = False
+    
+    ' Looping through each raw data file, calling the unmerge and copy macros to retrieve data
+    For Each ws In ThisWorkbook.Worksheets
+        If ws.Index > 3 Then
+            ws.Activate
+            Call Unmerge
+            Call copy(pre, data, ws, ArrCount, HeadcountArr)
+            
+            ArrCount = ArrCount + 1
+        End If
+    Next
+    
+    ' Deletes the pre sheet as it is not needed anymore
+    pre.Delete
+    Application.DisplayAlerts = True
+    
+    ' Calls the databse macro to begin generating the final kronos database
+    Call database(data, HeadcountArr)
+    
+End Sub
+Sub Unmerge()
+' Reformats the raw data sheet to be mutable
+' The data is gathered from the DHL Database and downloaded into a csv file for the kronos reports.
+' The function alters the main body of the data by unmerging and unwraping the formated cells
+    
+    Range("Q" & ContentRow).Select
+    ActiveCell.CurrentRegion.Select
+    Selection.Unmerge
+    With Selection
+        .WrapText = False
+        .Orientation = 0
+        .AddIndent = False
+        .IndentLevel = 0
+        .ShrinkToFit = False
+        .MergeCells = False
+    End With
+
+    
+    Rows("2:2").Select
+    With Selection
+        .WrapText = False
+        .Orientation = 0
+        .AddIndent = False
+        .IndentLevel = 0
+        .ShrinkToFit = False
+        .MergeCells = False
+    End With
+            
+           
+End Sub
+Sub copy(pre As Worksheet, data As Worksheet, ws As Worksheet, ArrCount As Long, HeadcountArr() As Long)
+' Finds columns with data in the raw data sheet, referenced by "ws", and copies it to the sheet called "pre"
+' Inputs the date from ws into pre
+    Dim URow As Long
+    Dim BRow As Long
+    Dim LR As Long
+    Dim LC As Long
+    Dim ColLetter As String
+    Dim LD As Long
+    
+    ' LC used as a temporary column holder for the "pre" sheet
+    LC = 2
+    
+    ' Finds the upper and bottom row, respectively, of the main body of each raw data file
+    ws.Range("B" & ContentRow).Select
+    URow = Selection.End(xlUp).Row + 1
+    ws.Range("B" & ContentRow).Select
+    BRow = Selection.End(xlDown).Row
+    
+    ' Clears the "pre" file before entering new data
+    pre.UsedRange.Delete
+    
+    ' Cycles through 26 columns of the raw data files
+    ' Looks for columns that are not empty, and captures the data into the next available column in "pre"
+    ''' Typically the data downloaded from DHL do not exceed 26 columns, however if this changes, simply increase the number "26" to a higher one
+    For i = 1 To 26
+        If Not IsEmpty(ws.Cells(ContentRow, i)) Then
+            ' Translates the column number with data into the respective letter
+            ColLetter = Split(ws.Cells(1, i).Address, "$")(1)
+            ws.Range(ColLetter & URow & ":" & ColLetter & BRow).copy
+            If IsEmpty(pre.Range("A1")) Then
+                ' If pre is empty
+                pre.Range("A1").PasteSpecial
+            Else
+                ' If pre isn't empty, find the next available column
+                pre.Cells(1, LC).PasteSpecial
+                LC = LC + 1
+                
+            End If
+        End If
+    Next i
+    
+    ' Call the dates macro to import the date into another column
+    Call dates(pre, ws, ArrCount, HeadcountArr)
+    
+    ' Copies the data from "pre" into the "data" sheet, containing to data for all seven days
+    pre.UsedRange.copy
+    If IsEmpty(data.Range("A1")) Then
+        data.Range("A1").PasteSpecial
+    Else
+        LD = data.Cells(Rows.Count, "A").End(xlUp).Row + 1
+        data.Range("A" & LD).PasteSpecial
+    End If
+End Sub
+Sub dates(pre As Worksheet, ws As Worksheet, ArrCount As Long, HeadcountArr() As Long)
+' Extracts the date from the raw data files, as well as seperating the 7 segments data that is contained within one cell
+    Dim L As Long
+    Dim dat As Long
+    Dim subb As String
+    Dim D As String
+    
+    ' info is an array containing the individual data seperated at "\"
+    Dim info As Variant
+    
+    ' Finds the length of the date in the date cell, it may differe depending on whether the day is single or double digits
+    ' Removes the title and desriptive words in front of the date
+    subb = ws.Range("B2").Value
+    dat = Len(ws.Range("B2")) - 13
+    
+    ' L represents the amount of rows for each day
+    L = pre.Range("A1", pre.Range("A1").End(xlDown)).Count
+    D = Right(subb, dat)
+    
+    ' Set a clumn to be flled with the date
+    pre.Range("I1:I" & L) = D
+    
+    ' For every row in the daily data, seperates the location cell into individual cells
+    For i = 1 To L
+        info = Split(pre.Range("C" & i), "/", 7)
+        pre.Range("J" & i).Value = info(1)
+        pre.Range("K" & i).Value = info(2)
+        pre.Range("L" & i).Value = info(3)
+        pre.Range("M" & i).Value = info(4)
+        pre.Range("N" & i).Value = info(5)
+        pre.Range("O" & i).Value = info(6)
+    Next i
+    
+    ' Inputs the row # in an array where the date changes to the next day
+    HeadcountArr(ArrCount) = L + HeadcountArr(ArrCount - 1)
+End Sub
+Sub database(data As Worksheet, HeadcountArr() As Long)
+' Gathers necessary data from the "data" sheet and generates the backend dataset for the kronos report according to format
+    Dim ws As Worksheet
+    Dim cws As Worksheet
+    Set cws = Worksheets(1)
+    
+    cws.Activate
+    
+    
+    ' Set the columns titles
+    Range("A1").Value = "ID"
+    Range("B1").Value = "Week Number"
+    Range("C1").Value = "Name"
+    Range("D1").Value = "ID"
+    Range("E1").Value = "Date"
+    Range("F1").Value = "PayCode"
+    Range("G1").Value = "Hours"
+    Range("H1").Value = "True Hours"
+    Range("I1").Value = "Status"
+    Range("J1").Value = "Department"
+    Range("K1").Value = "Location"
+    Range("L1").Value = "Workgroup"
+    Range("M1").Value = "Headcount"
+    Range("N1").Value = "Handled Shipments"
+    Range("O1").Value = "Hours Code"
+    Range("P1").Value = "OT Hours"
+    Range("Q1").Value = "Holiday Remark"
+    Range("R1").Value = "Holiday Filter"
+    Range("S1").Value = "Function Code"
+    Range("T1").Value = "Kronos Stn"
+    Range("U1").Value = "Province"
+    Range("V1").Value = "Job Code"
+    Range("W1").Value = "Supervisor #"
+    Range("X1").Value = "Activity Code"
+    Range("Y1").Value = "Wages"
+    
+
+    Dim LR As Long
+    
+    
+    ' The last used row in the data file
+    LR = data.Cells(Rows.Count, "A").End(xlUp).Row
+            
+    ' Uses the paste2 macro to move the columns in "data" to the final database
+        Call paste2(data.Range("A1:A" & LR), cws.Range("C2"), data)
+        Call paste2(data.Range("B1:B" & LR), cws.Range("D2"), data)
+        Call paste2(data.Range("D1:D" & LR), cws.Range("F2"), data)
+        Call paste2(data.Range("F1:F" & LR), cws.Range("G2"), data)
+        Call paste2(data.Range("H1:H" & LR), cws.Range("Y2"), data)
+        Call paste2(data.Range("I1:I" & LR), cws.Range("E2"), data)
+        Call paste2(data.Range("J1:J" & LR), cws.Range("S2"), data)
+        Call paste2(data.Range("K1:K" & LR), cws.Range("T2"), data)
+        Call paste2(data.Range("L1:L" & LR), cws.Range("U2"), data)
+        Call paste2(data.Range("M1:M" & LR), cws.Range("V2"), data)
+        Call paste2(data.Range("N1:N" & LR), cws.Range("W2"), data)
+        Call paste2(data.Range("O1:O" & LR), cws.Range("X2"), data)
+        
+        
+
+    ' Select the used cells in cws and set styling to be default/none
+    ActiveSheet.UsedRange.Select
+    
+    ' Change the background colour
+    With Selection.Font
+        .Name = "Arial Unicode MS"
+        .FontStyle = "Regular"
+        .Size = 9
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ThemeColor = xlThemeColorLight1
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontNone
+    End With
+    With Selection
+        .WrapText = False
+        .Orientation = 0
+        .AddIndent = False
+        .IndentLevel = 0
+        .ShrinkToFit = False
+        .MergeCells = False
+    End With
+    
+    'Remove the borders
+    Selection.Borders(xlDiagonalDown).LineStyle = xlNone
+    Selection.Borders(xlDiagonalUp).LineStyle = xlNone
+    Selection.Borders(xlEdgeLeft).LineStyle = xlNone
+    Selection.Borders(xlEdgeTop).LineStyle = xlNone
+    Selection.Borders(xlEdgeBottom).LineStyle = xlNone
+    Selection.Borders(xlEdgeRight).LineStyle = xlNone
+    Selection.Borders(xlInsideVertical).LineStyle = xlNone
+    Selection.Borders(xlInsideHorizontal).LineStyle = xlNone
+
+    With Selection.Interior
+        .Pattern = xlNone
+        .TintAndShade = 0
+        .PatternTintAndShade = 0
+    End With
+    
+    Application.DisplayAlerts = False
+    
+    ' Delete the raw data files, no more use
+    For Each ws In ThisWorkbook.Worksheets
+        If ws.Index > 2 Then
+            ws.Delete
+        End If
+    Next ws
+
+    ' Call import_constants to import the holiday, HR list, and shipments by location files
+    Call Import_constants
+'
+    cws.Activate
+'
+'
+'    ' Fills the first cell in their respective columns with excel functions
+'    ' Uses column_functions macro to autofill out entire column
+'    cws.Range("A2").Formula = "=K2&B2"
+'    Call Column_functions("A", LR)
+'    cws.Range("H2").Formula = "=IF(AND(F2=""UNAPPROVED OT"",OR(K2=""YEG"",K2=""YYC"",K2=""YWG"",K2=""YVR"",K2=""YHM"",K2=""YTZ"",K2=""YUL"",K2=""YOW"", K2=""YMX"",K2=""YQC"")),0,G2)"
+'    Call Column_functions("H", LR)
+'
+    ' Convert certain columns from text to number format
+    Call Convert_to_num("D", LR)
+    Call Convert_to_num("G", LR)
+    Call Convert_to_num("H", LR)
+    Call Convert_to_num("P", LR)
+    Call Convert_to_num("Y", LR)
+
+    ' Fills more columns with functions
+    cws.Range("B2").Formula = "=""W-""&weeknum(E2, 2)"
+    Call Column_functions("B", LR)
+'    cws.Range("O2").Formula = "=IF(OR(F2=""Regulieres"",F2=""Regular"",F2=""STAT Holiday No Counts"",F2=""STAT Holiday"",F2=""Jour Férié""),""Regular"",IF(OR(F2=""OT1.5"",F2=""Heures Supp 1.5"",F2=""Jour Férié @ 2.0"",F2=""STAT Worked 1.5"",F2=""STAT Worked 2.0""),""OT"",IF(AND(F2=""UNAPPROVED OT"",H2<>0),""OT"",""Other"")))"
+'    Call Column_functions("O", LR)
+'    cws.Range("P2").Formula = "=IF(O25=""OT"",H2,0)"
+'    Call Column_functions("P", LR)
+'    cws.Range("Q2").Formula = "=IFERROR(IF(AND(E2=43514,K2=""YVR""),""BC Family Day"",IF(AND(E2=43780,K2=""YVR""),""Remembrance Day"",IF(AND(K2<>""YUL"",K2<>""YMX"",K2<>""YQC"",E2=43514),""ON Family Day"",IF(AND(OR(K2=""YUL"",K2=""YMX"",K2=""YQC""),E2=43640),""St.Jean Baptiste"",VLOOKUP(E2,'Holidays Calendar'!$A:$B,2,FALSE))))),""Working Day"")"
+'    Call Column_functions("Q", LR)
+'    cws.Range("R2").Formula = "=IF(Q2=""Working Day"",Q2,""Public Holiday"")"
+'    Call Column_functions("R", LR)
+'    cws.Range("I2").Formula = "=VLOOKUP(D2,'HR Master list'!$A:$F,6,FALSE)"
+'    Call Column_functions("I", LR)
+'    cws.Range("J2").Formula = "=VLOOKUP(D2,'HR Master list'!$A:$K,7,FALSE)"
+'    Call Column_functions("J", LR)
+'    cws.Range("K2").Formula = "=IF(J2=""Ops Dispatch"","""",VLOOKUP(D2,'HR Master list'!$A:$K,8,FALSE))"
+'    Call Column_functions("K", LR)
+'    cws.Range("L2").Formula = "=IF(AND(J2=""OPERATIONS"",S2=""FEE004""),""COURIER"",IF(AND(J2=""OPERATIONS"",S2=""FEE163""),""RETAIL"",IF(VLOOKUP(D2,'HR Master list'!A:J,10,FALSE)=""OFFICE CLERKS"",""OFFICE CLERKS"",""WAREHOUSE"")))"
+'    Call Column_functions("L", LR)
+'    cws.Range("A2").Formula = "=K2&B2"
+'    Call Column_functions("A", LR)
+'    cws.Range("N2").Formula = "=IFERROR(VLOOKUP(A2,'Shipments by Locations'!$A:$E,5,FALSE)/COUNTIF(A:A,A2),0)"
+'    Call Column_functions("N", LR)
+'
+'    ' Function for inputing the headcount column
+'    ' Uses the previously declared HeadcountArr to determine the range for sumproduct when searching for repeating names
+'    Dim count As Long
+'    Dim g As Long
+'    Dim rw As Variant
+'
+'
+'    ' g keeps track of the index in HeadcountArr
+'    ' HeadountArr notes the first row where the date is different, use (g-1) to find the last row of a date
+'    count = 7
+'    For g = 1 To count
+'        cws.Range("M2").Formula = "=IF(SUMPRODUCT(($E$" & HeadcountArr(g - 1) & ":$E2=E2)*($D$" & HeadcountArr(g - 1) & ":$D2=D2))>1,0,1)"
+'        Call Column_functions("M", HeadcountArr(g) - 1)
+'    Next g
+'
+    ' Freezes the header row
+    With ActiveWindow
+        .SplitColumn = 0
+        .SplitRow = 1
+    End With
+    ActiveWindow.FreezePanes = True
+
+    ' Filters out the required function code, and pastes the data into a new sheet
+    cws.Range("A1").Select
+    Selection.AutoFilter
+
+    ' any future desired codes only needed to be added into the list below, in brackets "XXX111"
+    ActiveSheet.Range("$A$1:$Y$" & LR).AutoFilter Field:=19, Criteria1:=Array( _
+        "-", "FEE004", "FEE070", "FEE077", "FEE163", "FEE007"), Operator:=xlFilterValues
+    Range("A1:Y" & LR).Select
+    Selection.copy
+    Sheets.Add After:=ActiveSheet
+    ActiveSheet.Name = "Database"
+    ActiveSheet.Paste
+    Range("A1").Select
+    
+    
+    
+    ' Deletes the unformatted "data" file as no further use is required
+    data.Delete
+    
+    Application.DisplayAlerts = True
+    
+End Sub
+Sub paste2(a As Range, b As Range, data As Worksheet)
+' Copies the column data from range "a" in worksheet "data" to the location of range "b"
+'
+    data.Range(a, a.End(xlDown)).copy
+    b.PasteSpecial
+End Sub
+Sub Column_functions(column As String, LR As Long)
+' Auto fill columns with the function inputed in the first row
+'
+    Range(column & "2").Select
+    Selection.AutoFill Destination:=Range(column & "2:" & column & LR)
+    Range(column & "2:" & column & LR).Select
+    Selection.copy
+    Selection.PasteSpecial xlPasteValues
+End Sub
+Sub Convert_to_num(column As String, LR As Long)
+' Converts the text formatted cells to numbers
+'
+    Range(column & "2:" & column & LR).Select
+    With Selection
+        .NumberFormat = "General"
+        .Value = .Value
+    End With
+End Sub
